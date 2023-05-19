@@ -1,22 +1,12 @@
 (ns nes.core
-  {:nextjournal.clerk/toc true})
+  (:gen-class))
 
-;(require '[nextjournal.clerk :as clerk])
-;
-;(clerk/serve! {:browse? true})
-;(clerk/serve! {:watch-paths ["src/notebooks" "src/nes"]})
+(defn greet
+  "Callable entry point to the application."
+  [data]
+  (println (str "Hello, " (or (:name data) "World") "!")))
 
-(require '[io.github.humbleui.ui :as ui])
-
-(def ui
-  (ui/default-theme {}
-                    (ui/center
-                      (ui/label "Hello from Humble UI! 👋"))))
-
-(ui/start-app!
-  (ui/window
-    {:title "Humble 🐝 UI"}
-    #'ui))
-
-;; # Emulation Core
-
+(defn -main
+  "NES Emulator"
+  [& args]
+  (greet {:name (first args)}))
