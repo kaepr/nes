@@ -1,5 +1,6 @@
-{:paths ["src" "resources"]
- :deps {org.clojure/clojure {:mvn/version "1.11.1"}}
+{:paths ["src"]
+ :deps {org.clojure/clojure {:mvn/version "1.11.1"}
+        cljfx {:git/url "https://github.com/cljfx/cljfx" :sha "5f3737989ac1f57a5bf28c0070d1db12901a6d77"}}
  :aliases
  {:run-m {:main-opts ["-m" "nes.core"]}
   :run-x {:ns-default nes.core
