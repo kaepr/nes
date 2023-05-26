@@ -1,4 +1,5 @@
-(ns nes.cpu)
+(ns nes.cpu
+  (:require [nes.utils :as utils]))
 
 (def memory-size 65536)
 
@@ -7,14 +8,30 @@
             :reg-a             (byte 0)
             :reg-x             (byte 0)
             :reg-y             (byte 0)
-            :carry             false
-            :zero              false
-            :interrupt-disable false
-            :dec-mode          false
+            :cycles            0
+            :carry             true
+            :zero              true
+            :interrupt-disable true
+            :decimal-mode      true
             :break-command     false
-            :overflow          false
-            :negative          false
+            :unused            true
+            :overflow          true
+            :negative          true
             :memory            (byte-array memory-size)})
+
+(def status-bit-vec [:carry  :zero :interrupt-disable :decimal-mode :break-command :unused :overflow :negative])
+
+(defn status-to-byte [state]
+  (let [coll (map-indexed (fn [idx itm]
+                            (bit-shift-left (utils/bool-to-int (itm state)) idx))
+                          status-bit-vec)
+        res (reduce bit-or coll)]
+    (unchecked-byte res)))
+
+(defn byte-to-status [status-byte]
+  (let [coll (map (fn [idx]
+                    {(nth status-bit-vec idx) (bit-test status-byte idx)}) (range 0 8))]
+    (reduce merge {} coll)))
 
 (defn fetch
   "Returns byte pointed by the program counter."
@@ -271,12 +288,13 @@
 (defn read-byte [{^bytes memory :memory} address]
   (aget memory address))
 
-(defn write-byte [{^bytes memory :memory} address val]
-  (aset-byte memory address (byte val)))
+(defn write-byte [{^bytes memory :memory} address data]
+  "Sets byte into memory. Data argument must be a byte"
+  (aset-byte memory address data))
 
 (defn handle-addressing-mode [state inst]
-  "Returns the value to be used in execution using an Integer.
-   Also returns whether to add extra cycles or not."
+  "Returns values after handling the different addressing modes.
+   Also returns extra cycles present or memory address if required"
   (let [^byte memory (:memory state)
         reg-a (:reg-a state)
         reg-x (:reg-x state)
@@ -296,10 +314,16 @@
     (condp = mode
       :imp {}
       :acc {:value reg-a}
-      :imm {:value (Byte/toUnsignedInt (first operands))}
-      :zero {:value (read (first operands))}
-      :zero-x {:value (read (bit-and 0x00FF (+ (Byte/toUnsignedInt reg-x) (Byte/toUnsignedInt (first operands)))))}
-      :zero-y {:value (read (bit-and 0x00FF (+ (Byte/toUnsignedInt reg-y) (Byte/toUnsignedInt (first operands)))))}
+      :imm {:value (first operands)}
+      :zero {:value (read (Byte/toUnsignedInt (first operands))) :mem-address (Byte/toUnsignedInt (first operands))}
+      :zero-x (let [address (bit-and 0x00FF
+                                     (+ (Byte/toUnsignedInt reg-x)
+                                        (Byte/toUnsignedInt (first operands))))]
+                {:value (read address) :mem-address address})
+      :zero-y (let [address (bit-and 0x00FF
+                                     (+ (Byte/toUnsignedInt reg-y)
+                                        (Byte/toUnsignedInt (first operands))))]
+                {:value (read address) :mem-address address})
       :rel {:value (first operands)}
       :abs (let [address (get-address-from-operands)]
              {:value (read address) :mem-address address})
@@ -318,8 +342,9 @@
                                (bit-and 0xFF00 lsb-address)
                                (+ 1 lsb-address))
                  low (read lsb-address)
-                 high (read msb-address)]
-             {:value (bit-or (bit-shift-left high 8) low)})
+                 high (read msb-address)
+                 address (bit-or (bit-shift-left high 8) low)]
+             {:value address :mem-address address})
       :ind-x (let [offset (Byte/toUnsignedInt (first operands))
                    x-val (Byte/toUnsignedInt reg-x)
                    low (bit-and 0x00FF (+ offset x-val))
@@ -334,183 +359,539 @@
                    extra-cycles (high-bits-same base-address address)]
                {:value (read address) :mem-address address :extra-cycles extra-cycles}))))
 
+(defn overflowed-adc? [acc mem res]
+  "Returns whether overflow occurred or not for ADC instruction. Arguments must be long."
+  (bit-test
+    (bit-and
+      (bit-xor acc res)
+      (bit-not (bit-xor acc mem)))
+    7))
 
-(defn execute-adc [state inst]
-  (let [mode (:mode inst)
-        acc (:reg-a state)]))
+(defn execute-adc [state inst values]
+  (let [extra-cycles (or (:extra-cycles values) 0)
+        acc (Byte/toUnsignedInt (:reg-a state))
+        fetched (Byte/toUnsignedInt (:value values))
+        res (+ (utils/bool-to-int (:carry state))
+               acc
+               fetched)
+        wrapped-res (bit-and 0xFF res)]
+    {:pc (+ (:bytes inst) (:pc state))
+     :cycles-elapsed (+ extra-cycles (:cycles inst))
+     :reg-a (unchecked-byte wrapped-res)
+     :carry (> val 0xFF)
+     :zero (zero? wrapped-res)
+     :negative (bit-test wrapped-res 7)
+     :overflow (overflowed-adc? acc fetched res)}))
 
-(defn execute-and [state inst])
+(defn execute-and [state inst values]
+  (let [extra-cycles (or (:extra-cycles values) 0)
+        res (bit-and (:reg-a state) (:value values))]
+    {:reg-a res
+     :pc (+ (:bytes inst) (:pc state))
+     :cycles-elapsed (+ extra-cycles (:cycles inst))
+     :zero (zero? res)
+     :negative (bit-test res 7)}))
 
-(defn execute-asl [state inst])
+(defn execute-asl [state inst values]
+  (let [val (:value values)
+        res (bit-shift-left val 1)
+        handle-acc-mem (fn [] (if (= (:mode inst) :acc)
+                                {:reg-a res
+                                 :zero (zero? res)}
+                                (do (write-byte (:memory state) (:mem-address values) res)
+                                    nil)))]
+    (merge {:pc (+ (:bytes inst) (:pc state))
+            :cycles-elapsed (:cycles inst)
+            :carry (bit-test val 7)
+            :negative (bit-test res 7)}
+           (handle-acc-mem))))
 
-(defn execute-bcc [state inst])
+(defn branch-instruction-handler [state inst values test]
+  (let [pc (:pc state)
+        next-pc (if test (bit-and
+                           0xFFFF
+                           (+ (:bytes inst) pc (:value values))))
+        extra-cycles (+ (if test 1 0)
+                        (if (= (bit-and 0xFF00 next-pc) (bit-and 0xFF00 pc)) 0 2))]
+    {:pc next-pc
+     :cycles-elapsed (+ (:cycles inst) extra-cycles)}))
 
-(defn execute-bcs [state inst])
+(defn execute-bcc [state inst values]
+  (branch-instruction-handler state inst values (false? (:carry state))))
 
-(defn execute-beq [state inst])
+(defn execute-bcs [state inst values]
+  (branch-instruction-handler state inst values (true? (:carry state))))
 
-(defn execute-bit [state inst])
+(defn execute-beq [state inst values]
+  (branch-instruction-handler state inst values (true? (:zero state))))
 
-(defn execute-bmi [state inst])
+(defn execute-bit [state inst values]
+  (let [val (:value values)
+        acc (:reg-a state)
+        res (bit-and val acc)]
+    {:pc (+ (:pc state) (:bytes inst))
+     :cycles-elapsed (:cycles inst)
+     :zero (zero? res)
+     :overflow (bit-test val 6)
+     :negative (bit-test val 7)}))
 
-(defn execute-bne [state inst])
+(defn execute-bmi [state inst values]
+  (branch-instruction-handler state inst values (true? (:negative state))))
 
-(defn execute-bpl [state inst])
+(defn execute-bne [state inst values]
+  (branch-instruction-handler state inst values (false? (:zero state))))
 
-(defn execute-brk [state inst])
+(defn execute-bpl [state inst values]
+  (branch-instruction-handler state inst values (false? (:negative state))))
 
-(defn execute-bvc [state inst])
+(defn execute-brk [state inst _values]
+  (let [pc (unchecked-byte (+ 1 (Byte/toUnsignedInt (:pc state))))
+        sp (:sp state)
+        next-pc (utils/bytes-to-word
+                  (read-byte (:memory state) 0xFFFF)
+                  (read-byte (:memory state) 0xFFFE))
+        status-byte (status-to-byte (merge state {:interrupt-disable true
+                                                  :break-command true}))]
+    (do
+      (write-byte (:memory state) (+ 0x100 sp) (utils/word-msb pc))
+      (write-byte (:memory state) (+ 0x100 (- sp 1)) (utils/word-msb pc))
+      (write-byte (:memory state) (+ 0x100 (- sp 2)) status-byte)
+      {:pc next-pc
+       :sp (- sp 3)
+       :cycles-elapsed (:cycles inst)
+       :interrupt-disable true
+       :break-command false})))
 
-(defn execute-bvs [state inst])
+(defn execute-bvc [state inst values]
+  (branch-instruction-handler state inst values (false? (:overflow state))))
 
-(defn execute-clc [state inst])
+(defn execute-bvs [state inst values]
+  (branch-instruction-handler state inst values (true? (:overflow state))))
 
-(defn execute-cld [state inst])
+(defn implied-instruction-handler [state inst kvs]
+  (merge kvs {:pc (+ (:pc state) (:bytes inst))
+              :cycles-elapsed (:cycles inst)}))
 
-(defn execute-cli [state inst])
+(defn execute-clc [state inst _values]
+  (implied-instruction-handler state inst {:carry false}))
 
-(defn execute-clv [state inst])
+(defn execute-cld [state inst _values]
+  (implied-instruction-handler state inst {:decimal-mode false}))
 
-(defn execute-cmp [state inst])
+(defn execute-cli [state inst _values]
+  (implied-instruction-handler state inst {:interrupt-disable false}))
 
-(defn execute-cpx [state inst])
+(defn execute-clv [state inst _values]
+  (implied-instruction-handler state inst {:overflow false}))
 
-(defn execute-cpy [state inst])
+(defn negative? [val] (bit-test val 7))
 
-(defn execute-dec [state inst])
+(defn execute-cmp [state inst values]
+  (let [extra-cycles (or (:extra-cycles values) 0)
+        val (Byte/toUnsignedInt (:value values))
+        acc (Byte/toUnsignedInt (:reg-a state))
+        res (- acc val)]
+    {:pc (+ (:pc state) (:bytes inst))
+     :cycles-elapsed (+ (:cycles inst) extra-cycles)
+     :carry (>= acc val)
+     :zero (zero? (bit-and 0xFF res))
+     :negative (negative? res)}))
 
-(defn execute-dex [state inst])
+(defn execute-cpx [state inst values]
+  (let [val (Byte/toUnsignedInt (:value values))
+        val-x (Byte/toUnsignedInt (:reg-x state))
+        res (- val-x val)]
+    {:pc (+ (:pc state) (:bytes inst))
+     :cycles-elapsed (:cycles inst)
+     :carry (>= val-x val)
+     :zero (zero? (bit-and 0xFF res))
+     :negative (negative? res)}))
 
-(defn execute-dey [state inst])
+(defn execute-cpy [state inst values]
+  (let [val (Byte/toUnsignedInt (:value values))
+        val-y (Byte/toUnsignedInt (:reg-y state))
+        res (- val-y val)]
+    {:pc (+ (:pc state) (:bytes inst))
+     :cycles-elapsed (:cycles inst)
+     :carry (>= val-y val)
+     :zero (zero? (bit-and 0xFF res))
+     :negative (negative? res)}))
 
-(defn execute-eor [state inst])
+(defn execute-dec [state inst values]
+  (let [val (Byte/toUnsignedInt (:value values))
+        res (bit-and 0xFF (- val 1))]
+    (do
+      (write-byte (:memory state) (:mem-address values) (unchecked-byte res))
+      {:pc (+ (:pc state) (:bytes inst))
+       :cycles-elapsed (:cycles inst)
+       :zero (zero? res)
+       :negative (negative? res)})))
 
-(defn execute-inc [state inst])
 
-(defn execute-inx [state inst])
+(defn execute-dex [state inst _values]
+  (let [reg-x (bit-and 0xFF (- (Byte/toUnsignedInt (:reg-x state)) 1))]
+    (implied-instruction-handler state inst {:reg-x (unchecked-byte reg-x)
+                                             :zero (zero? reg-x)
+                                             :negative (bit-test reg-x 7)})))
 
-(defn execute-iny [state inst])
+(defn execute-dey [state inst _values]
+  (let [reg-y (bit-and 0xFF (- (Byte/toUnsignedInt (:reg-y state)) 1))]
+    (implied-instruction-handler state inst {:reg-y (unchecked-byte reg-y)
+                                             :zero (zero? reg-y)
+                                             :negative (bit-test reg-y 7)})))
 
-(defn execute-jmp [state inst])
+(defn execute-eor [state inst values]
+  (let [val (:value values)
+        acc (:reg-a state)
+        extra-cycles (or (:extra-cycles values) 0)
+        res (bit-xor val acc)]
+    {:pc (+ (:pc state) (:bytes inst))
+     :cycles-elapsed (+ (:cycles inst) extra-cycles)
+     :reg-a res
+     :zero (zero? res)
+     :negative (negative? res)}))
 
-(defn execute-jsr [state inst])
+(defn execute-inc [state inst values]
+  (let [val (Byte/toUnsignedInt (:value values))
+        res (bit-and 0xFF (+ val 1))]
+    (do
+      (write-byte (:memory state) (:mem-address values) (unchecked-byte res))
+      {:pc (+ (:pc state) (:bytes inst))
+       :cycles-elapsed (:cycles inst)
+       :zero (zero? res)
+       :negative (negative? res)})))
 
-(defn execute-lda [state inst])
+(defn execute-inx [state inst _values]
+  (let [reg-x (bit-and 0xFF (+ (Byte/toUnsignedInt (:reg-x state)) 1))]
+    (implied-instruction-handler state inst {:reg-x (unchecked-byte reg-x)
+                                             :zero (zero? reg-x)
+                                             :negative (bit-test reg-x 7)})))
 
-(defn execute-ldx [state inst])
+(defn execute-iny [state inst _values]
+  (let [reg-y (bit-and 0xFF (- (Byte/toUnsignedInt (:reg-y state)) 1))]
+    (implied-instruction-handler state inst {:reg-y (unchecked-byte reg-y)
+                                             :zero (zero? reg-y)
+                                             :negative (bit-test reg-y 7)})))
 
-(defn execute-ldy [state inst])
+(defn execute-jmp [_state inst values]
+  (let [address (:mem-address values)]
+    {:pc (bit-and 0xFFFF address)
+     :cycles-elapsed (:cycles inst)}))
 
-(defn execute-lsr [state inst])
+(defn execute-jsr [state inst values]
+  (let [next-pc (:mem-address values)
+        sp (:sp state)
+        pc (- (:pc state) 1)
+        low (utils/word-lsb pc)
+        high (utils/word-msb pc)
+        address (+ 0x100 sp)]
+    (do
+      (write-byte (:memory state) address high)
+      (write-byte (:memory state) (- address 1) low)
+      {:cycles-elapsed (:cycles inst)
+       :pc (bit-and 0xFFFF next-pc)
+       :sp (- sp 2)})))
 
-(defn execute-nop [state inst])
+(defn execute-lda [state inst values]
+  (let [res (:value values)
+        extra-cycles (or (:extra-cycles values) 0)]
+    {:pc (+ (:pc state) (:bytes inst))
+     :cycles-elapsed (+ (:cycles inst) extra-cycles)
+     :reg-a res
+     :zero (zero? res)
+     :negative (negative? res)}))
 
-(defn execute-ora [state inst])
+(defn execute-ldx [state inst values]
+  (let [res (:value values)
+        extra-cycles (or (:extra-cycles values) 0)]
+    {:pc (+ (:pc state) (:bytes inst))
+     :cycles-elapsed (+ (:cycles inst) extra-cycles)
+     :reg-x res
+     :zero (zero? res)
+     :negative (negative? res)}))
 
-(defn execute-pha [state inst])
+(defn execute-ldy [state inst values]
+  (let [res (:value values)
+        extra-cycles (or (:extra-cycles values) 0)]
+    {:pc (+ (:pc state) (:bytes inst))
+     :cycles-elapsed (+ (:cycles inst) extra-cycles)
+     :reg-y res
+     :zero (zero? res)
+     :negative (negative? res)}))
 
-(defn execute-php [state inst])
 
-(defn execute-pla [state inst])
+(defn execute-lsr [state inst values]
+  (let [val (:value values)
+        res (unsigned-bit-shift-right val 1)
+        handle-acc-mode (fn []
+                          (if (= :acc (:mode inst))
+                            {:reg-a res}
+                            (do
+                              (write-byte (:memory state) (:mem-address values) res)
+                              nil)))]
+    (merge {:pc (+ (:pc state) (:bytes inst))
+            :cycles-elapsed (:cycles inst)
+            :carry (utils/bool-to-int (bit-test val 0))
+            :zero (zero? res)
+            :negative (negative? res)}
+           (handle-acc-mode))))
 
-(defn execute-plp [state inst])
+(defn execute-nop [state inst _values]
+  (implied-instruction-handler state inst {}))
 
-(defn execute-rol [state inst])
+(defn execute-ora [state inst values]
+  (let [val (:value values)
+        acc (:reg-a state)
+        res (bit-or val acc)
+        extra-cycles (or (:extra-cycles values) 0)]
+    {:cycles-elapsed (+ extra-cycles (:cycles inst))
+     :pc (+ (:bytes inst) (:pc state))
+     :reg-a res
+     :zero (zero? res)
+     :negative (negative? res)}))
 
-(defn execute-ror [state inst])
 
-(defn execute-rti [state inst])
+(defn execute-pha [state inst _values]
+  (let [sp (:sp state)
+        address (+ 0x100 sp)]
+    (do
+      (write-byte (:memory state) address (:reg-a state))
+      (implied-instruction-handler state inst {:sp (- sp 1)}))))
 
-(defn execute-rts [state inst])
+(defn execute-php [state inst _values]
+  (let [sp (:sp state)
+        address (+ 0x100 sp)]
+    (do
+      (write-byte (:memory state) address (status-to-byte
+                                            (assoc state :break-command true :unused true)))
+      (implied-instruction-handler state inst {:sp (- sp 1)
+                                               :break-command false
+                                               :unused false}))))
 
-(defn execute-sbc [state inst])
+(defn execute-pla [state inst _values]
+  (let [sp (:sp state)
+        val (read-byte (:memory state) (+ 0x100 sp))]
+    (implied-instruction-handler state inst {:reg-a val
+                                             :sp (+ sp 1)
+                                             :zero (zero? val)
+                                             :negative (bit-test val 7)})))
 
-(defn execute-sec [state inst])
+(defn execute-plp [state inst _values]
+  (let [sp (:sp state)
+        status-byte (read-byte (:memory state) (+ 0x100 sp))]
+    (implied-instruction-handler state inst (merge
+                                              (byte-to-status status-byte)
+                                              {:sp (+ sp 1)
+                                               :unused true}))))
 
-(defn execute-sed [state inst])
+(defn execute-rol [state inst values]
+  (let [val (:value values)
+        res (utils/set-bit (unchecked-byte (bit-shift-left val 1)) (:carry state) 0)
+        handle-acc-mode (fn []
+                          (if (= :acc (:mode inst))
+                            {:reg-a res
+                             :zero (zero? res)}
+                            (do
+                              (write-byte (:memory state) (:mem-address values) res)
+                              nil)))]
+    (merge {:pc (+ (:pc state) (:bytes inst))
+            :cycles-elapsed (:cycles inst)
+            :carry (bit-test val 7)
+            :negative (bit-test res 7)}
+           (handle-acc-mode))))
 
-(defn execute-sei [state inst])
+(defn execute-ror [state inst values]
+  (let [val (:value values)
+        res (utils/set-bit (unchecked-byte (unsigned-bit-shift-right val 1)) (:carry state) 7)
+        handle-acc-mode (fn []
+                          (if (= :acc (:mode inst))
+                            {:reg-a res
+                             :zero (zero? res)}
+                            (do
+                              (write-byte (:memory state) (:mem-address values) res)
+                              nil)))]
+    (merge {:pc (+ (:pc state) (:byte inst))
+            :cycles-elapsed (:cycles inst)
+            :carry (bit-test val 0)
+            :negative (bit-test res 7)}
+           (handle-acc-mode))))
 
-(defn execute-sta [state inst])
+(defn execute-rti [state inst _values]
+  (let [sp (:sp state)
+        status-byte (read-byte (:memory state) (+ 0x100 1 sp))
+        pc-lsb (read-byte (:memory state) (+ 0x100 2 sp))
+        pc-msb (read-byte (:memory state) (+ 0x100 3 sp))]
+    (merge {:pc (utils/bytes-to-word pc-msb pc-lsb)
+            :cycles-elapsed (:cycles inst)
+            :sp (+ sp 3)}
+           (merge (byte-to-status status-byte)
+                  {:break-command false
+                   :unused false}))))
 
-(defn execute-stx [state inst])
+(defn execute-rts [state inst _values]
+  (let [sp (:sp state)
+        pc-lsb (read-byte (:memory state) (+ 0x100 1 sp))
+        pc-msb (read-byte (:memory state) (+ 0x100 2 sp))]
+    {:pc (+ 1 (utils/bytes-to-word pc-msb pc-lsb))
+     :cycles-elapsed (:cycles inst)}))
 
-(defn execute-sty [state inst])
+(defn overflowed-sbc? [acc mem res]
+ "Returns whether overflow occurred or not for SBC instruction. Arguments must be long."
+  (bit-test
+    (bit-and
+      (bit-xor res acc)
+      (bit-xor mem res))
+    7))
 
-(defn execute-tax [state inst])
+(defn execute-sbc [state inst values]
+  (let [extra-cycles (or (:extra-cycles values) 0)
+        fetched (Byte/toUnsignedInt (:value values))
+        fetched-inv (bit-xor 0x00FF fetched)
+        acc (Byte/toUnsignedInt (:reg-a state))
+        res (+ (utils/bool-to-int (:carry state))
+               acc
+               fetched-inv)
+        wrapped-res (bit-and res 0xFF)]
+    {:reg-a (unchecked-byte wrapped-res)
+     :cycles-elapsed (+ extra-cycles (:cycles inst))
+     :pc (+ (:bytes inst) (:pc state))
+     :carry (> res 0xFF)
+     :zero (zero? wrapped-res)
+     :overflow (overflowed-sbc? acc fetched-inv res)
+     :negative (bit-test wrapped-res 7)}))
 
-(defn execute-tay [state inst])
+(defn execute-sec [state inst _values]
+  (implied-instruction-handler state inst {:carry true}))
 
-(defn execute-tsx [state inst])
+(defn execute-sed [state inst _values]
+  (implied-instruction-handler state inst {:decimal-mode true}))
 
-(defn execute-txa [state inst])
+(defn execute-sei [state inst _values]
+  (implied-instruction-handler state inst {:interrupt-disable true}))
 
-(defn execute-txs [state inst])
+(defn execute-sta [state inst values]
+  (let [val (:reg-a state)
+        address (:mem-address values)]
+    (do
+      (write-byte (:memory state) address val)
+      {:pc (+ (:pc state) (:bytes inst))
+       :cycles-elapsed (:cycles inst)})))
 
-(defn execute-tya [state inst])
+(defn execute-stx [state inst values]
+  (let [val (:reg-x state)
+        address (:mem-address values)]
+    (do
+      (write-byte (:memory state) address val)
+      {:pc (+ (:pc state) (:bytes inst))
+       :cycles-elapsed (:cycles inst)})))
+
+(defn execute-sty [state inst values]
+  (let [val (:reg-y state)
+        address (:mem-address values)]
+    (do
+      (write-byte (:memory state) address val)
+      {:pc (+ (:pc state) (:bytes inst))
+       :cycles-elapsed (:cycles inst)})))
+
+(defn execute-tax [state inst _values]
+  (let [acc (:reg-a state)]
+    (implied-instruction-handler state inst {:reg-x acc
+                                             :zero (zero? acc)
+                                             :negative (bit-test acc 7)})))
+
+(defn execute-tay [state inst _values]
+  (let [acc (:reg-a state)]
+    (implied-instruction-handler state inst {:reg-y acc
+                                             :zero (zero? acc)
+                                             :negative (bit-test acc 7)})))
+
+(defn execute-tsx [state inst _values]
+  (let [sp-val (unchecked-byte (:sp state))]
+    (implied-instruction-handler state inst {:reg-x sp-val
+                                             :zero (zero? sp-val)
+                                             :negative (bit-test sp-val 7)})))
+
+(defn execute-txa [state inst _values]
+  (let [x-val (:reg-x state)]
+    (implied-instruction-handler state inst {:reg-a x-val
+                                             :zero (zero? x-val)
+                                             :negative (bit-test x-val 7)})))
+
+
+(defn execute-txs [state inst _values]
+  (let [x-val (Byte/toUnsignedInt (:reg-x state))]
+    (implied-instruction-handler state inst {:sp x-val})))
+
+
+(defn execute-tya [state inst _values]
+  (let [y-val (:reg-y state)]
+    (implied-instruction-handler state inst {:reg-a y-val
+                                             :zero (zero? y-val)
+                                             :negative (bit-test y-val 7)})))
 
 (defn execute
-  "Returns new emulation state, and cycles elapsed after executing one instruction."
+  "Returns the changed cpu state, and cycles elapsed after executing instruction."
   [state inst]
   (let [name (:name inst)
-        ^bytes memory (:memory state)]
+        ^bytes memory (:memory state)
+        values (handle-addressing-mode state inst)]
     (condp = name
-      :ADC (execute-adc state inst)
-      :AND (execute-and state inst)
-      :ASL (execute-asl state inst)
-      :BCC (execute-bcc state inst)
-      :BCS (execute-bcs state inst)
-      :BEQ (execute-beq state inst)
-      :BIT (execute-bit state inst)
-      :BMI (execute-bmi state inst)
-      :BNE (execute-bne state inst)
-      :BPL (execute-bpl state inst)
-      :BRK (execute-brk state inst)
-      :BVC (execute-bvc state inst)
-      :BVS (execute-bvs state inst)
-      :CLC (execute-clc state inst)
-      :CLD (execute-cld state inst)
-      :CLI (execute-cli state inst)
-      :CLV (execute-clv state inst)
-      :CMP (execute-cmp state inst)
-      :CPX (execute-cpx state inst)
-      :CPY (execute-cpy state inst)
-      :DEC (execute-dec state inst)
-      :DEX (execute-dex state inst)
-      :DEY (execute-dey state inst)
-      :EOR (execute-eor state inst)
-      :INC (execute-inc state inst)
-      :INX (execute-inx state inst)
-      :INY (execute-iny state inst)
-      :JMP (execute-jmp state inst)
-      :JSR (execute-jsr state inst)
-      :LDA (execute-lda state inst)
-      :LDX (execute-ldx state inst)
-      :LDY (execute-ldy state inst)
-      :LSR (execute-lsr state inst)
-      :NOP (execute-nop state inst)
-      :ORA (execute-ora state inst)
-      :PHA (execute-pha state inst)
-      :PHP (execute-php state inst)
-      :PLA (execute-pla state inst)
-      :PLP (execute-plp state inst)
-      :ROL (execute-rol state inst)
-      :ROR (execute-ror state inst)
-      :RTI (execute-rti state inst)
-      :RTS (execute-rts state inst)
-      :SBC (execute-sbc state inst)
-      :SEC (execute-sec state inst)
-      :SED (execute-sed state inst)
-      :SEI (execute-sei state inst)
-      :STA (execute-sta state inst)
-      :STX (execute-stx state inst)
-      :STY (execute-sty state inst)
-      :TAX (execute-tax state inst)
-      :TAY (execute-tay state inst)
-      :TSX (execute-tsx state inst)
-      :TXA (execute-txa state inst)
-      :TXS (execute-txs state inst)
-      :TYA (execute-tya state inst))))
+      :ADC (execute-adc state inst values)
+      :AND (execute-and state inst values)
+      :ASL (execute-asl state inst values)
+      :BCC (execute-bcc state inst values)
+      :BCS (execute-bcs state inst values)
+      :BEQ (execute-beq state inst values)
+      :BIT (execute-bit state inst values)
+      :BMI (execute-bmi state inst values)
+      :BNE (execute-bne state inst values)
+      :BPL (execute-bpl state inst values)
+      :BRK (execute-brk state inst values)
+      :BVC (execute-bvc state inst values)
+      :BVS (execute-bvs state inst values)
+      :CLC (execute-clc state inst values)
+      :CLD (execute-cld state inst values)
+      :CLI (execute-cli state inst values)
+      :CLV (execute-clv state inst values)
+      :CMP (execute-cmp state inst values)
+      :CPX (execute-cpx state inst values)
+      :CPY (execute-cpy state inst values)
+      :DEC (execute-dec state inst values)
+      :DEX (execute-dex state inst values)
+      :DEY (execute-dey state inst values)
+      :EOR (execute-eor state inst values)
+      :INC (execute-inc state inst values)
+      :INX (execute-inx state inst values)
+      :INY (execute-iny state inst values)
+      :JMP (execute-jmp state inst values)
+      :JSR (execute-jsr state inst values)
+      :LDA (execute-lda state inst values)
+      :LDX (execute-ldx state inst values)
+      :LDY (execute-ldy state inst values)
+      :LSR (execute-lsr state inst values)
+      :NOP (execute-nop state inst values)
+      :ORA (execute-ora state inst values)
+      :PHA (execute-pha state inst values)
+      :PHP (execute-php state inst values)
+      :PLA (execute-pla state inst values)
+      :PLP (execute-plp state inst values)
+      :ROL (execute-rol state inst values)
+      :ROR (execute-ror state inst values)
+      :RTI (execute-rti state inst values)
+      :RTS (execute-rts state inst values)
+      :SBC (execute-sbc state inst values)
+      :SEC (execute-sec state inst values)
+      :SED (execute-sed state inst values)
+      :SEI (execute-sei state inst values)
+      :STA (execute-sta state inst values)
+      :STX (execute-stx state inst values)
+      :STY (execute-sty state inst values)
+      :TAX (execute-tax state inst values)
+      :TAY (execute-tay state inst values)
+      :TSX (execute-tsx state inst values)
+      :TXA (execute-txa state inst values)
+      :TXS (execute-txs state inst values)
+      :TYA (execute-tya state inst values))))
 
 (fetch-operands state (decode (fetch state)))
 
