@@ -29,4 +29,6 @@
 /classes
 /target
 .idea
+log.txt
+./log.txt
 

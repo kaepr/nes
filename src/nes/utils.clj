@@ -19,3 +19,4 @@
 (defn word-msb [val]
   (unchecked-byte (bit-and 0xFF (unsigned-bit-shift-right val 8))))
 
+(defn negative? [val] (bit-test val 7))

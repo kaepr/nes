@@ -3,23 +3,7 @@
 
 (def memory-size 65536)
 
-(def state {:sp                0
-            :pc                0
-            :reg-a             (byte 0)
-            :reg-x             (byte 0)
-            :reg-y             (byte 0)
-            :cycles            0
-            :carry             true
-            :zero              true
-            :interrupt-disable true
-            :decimal-mode      true
-            :break-command     false
-            :unused            true
-            :overflow          true
-            :negative          true
-            :memory            (byte-array memory-size)})
-
-(def status-bit-vec [:carry  :zero :interrupt-disable :decimal-mode :break-command :unused :overflow :negative])
+(def status-bit-vec [:carry :zero :interrupt-disable :decimal-mode :break-command :unused :overflow :negative])
 
 (defn status-to-byte [state]
   (let [coll (map-indexed (fn [idx itm]
@@ -32,6 +16,27 @@
   (let [coll (map (fn [idx]
                     {(nth status-bit-vec idx) (bit-test status-byte idx)}) (range 0 8))]
     (reduce merge {} coll)))
+
+(Byte/toUnsignedInt (byte 0))
+
+(def default-cpu-state
+  (merge {:sp                0xFD
+          :pc                0
+          :reg-a             (byte 0)
+          :reg-x             (byte 0)
+          :reg-y             (byte 0)
+          :cycles            0
+          :memory            (byte-array memory-size (unchecked-byte 0x0))}
+         (byte-to-status 0x24)))
+
+(byte-to-status 0x24)
+(status-to-byte default-cpu-state)
+
+(defn create-cpu
+  ([] (create-cpu nil))
+  ([kvs] (merge default-cpu-state kvs)))
+
+(def state (create-cpu {:zero false}))
 
 (defn fetch
   "Returns byte pointed by the program counter."
@@ -49,7 +54,8 @@
 (defn decode
   "Returns a map of the instruction data using given opcode.
   The input opcode is a signed byte.
-  Source: https://www.nesdev.org/obelisk-6502-guide/reference.html"
+  Source: https://www.nesdev.org/obelisk-6502-guide/reference.html
+  Source (undocumented opcodes): https://www.masswerk.at/6502/6502_instruction_set.html#illegals"
   [opcode]
   (let [op (Byte/toUnsignedInt opcode)]
     (cond
@@ -151,7 +157,7 @@
       ;; INY
       (= op 0xc8) (create-inst-map op 1 2 :imp :INY)
       ;; JMP
-      (= op 0x4c) (create-inst-map op 3 5 :abs :JMP)
+      (= op 0x4c) (create-inst-map op 3 3 :abs :JMP)
       (= op 0x6c) (create-inst-map op 3 5 :ind :JMP)
       ;; JSR
       (= op 0x20) (create-inst-map op 3 6 :abs :JSR)
@@ -184,6 +190,12 @@
       (= op 0x5e) (create-inst-map op 3 7 :abs-x :LSR)
       ;; NOP
       (= op 0xea) (create-inst-map op 1 2 :imp :NOP)
+      (= op 0x1a) (create-inst-map op 1 2 :imp :NOP)
+      (= op 0x3a) (create-inst-map op 1 2 :imp :NOP)
+      (= op 0x5a) (create-inst-map op 1 2 :imp :NOP)
+      (= op 0x7a) (create-inst-map op 1 2 :imp :NOP)
+      (= op 0xda) (create-inst-map op 1 2 :imp :NOP)
+      (= op 0xfa) (create-inst-map op 1 2 :imp :NOP)
       ;; ORA
       (= op 0x09) (create-inst-map op 2 2 :imm :ORA)
       (= op 0x05) (create-inst-map op 2 3 :zero :ORA)
@@ -260,8 +272,92 @@
       (= op 0x9a) (create-inst-map op 1 2 :imp :TXS)
       ;; TYA
       (= op 0x98) (create-inst-map op 1 2 :imp :TYA)
-      ;; Return NOP for illegal operations
-      :else (create-inst-map 0xea 1 2 :imp :NOP))))
+      ;; DOP
+      (= op 0x04) (create-inst-map op 2 3 :zero :DOP)
+      (= op 0x14) (create-inst-map op 2 4 :zero-x :DOP)
+      (= op 0x34) (create-inst-map op 2 4 :zero-x :DOP)
+      (= op 0x44) (create-inst-map op 2 3 :zero :DOP)
+      (= op 0x54) (create-inst-map op 2 4 :zero-x :DOP)
+      (= op 0x64) (create-inst-map op 2 3 :zero :DOP)
+      (= op 0x74) (create-inst-map op 2 4 :zero-x :DOP)
+      (= op 0x80) (create-inst-map op 2 2 :imm :DOP)
+      (= op 0x82) (create-inst-map op 2 2 :imm :DOP)
+      (= op 0x89) (create-inst-map op 2 2 :imm :DOP)
+      (= op 0xc2) (create-inst-map op 2 2 :imm :DOP)
+      (= op 0xd4) (create-inst-map op 2 4 :zero-x :DOP)
+      (= op 0xe2) (create-inst-map op 2 2 :imm :DOP)
+      (= op 0xf4) (create-inst-map op 2 4 :zero-x :DOP)
+      ;; TOP
+      (= op 0x0c) (create-inst-map op 3 4 :abs :TOP)
+      (= op 0x1c) (create-inst-map op 3 4 :abs-x :TOP)
+      (= op 0x3c) (create-inst-map op 3 4 :abs-x :TOP)
+      (= op 0x5c) (create-inst-map op 3 4 :abs-x :TOP)
+      (= op 0x7c) (create-inst-map op 3 4 :abs-x :TOP)
+      (= op 0xdc) (create-inst-map op 3 4 :abs-x :TOP)
+      (= op 0xfc) (create-inst-map op 3 4 :abs-x :TOP)
+      ;; LAX
+      (= op 0xa7) (create-inst-map op 2 3 :zero :LAX)
+      (= op 0xb7) (create-inst-map op 2 4 :zero-y :LAX)
+      (= op 0xaf) (create-inst-map op 3 4 :abs :LAX)
+      (= op 0xbf) (create-inst-map op 3 4 :abs-y :LAX)
+      (= op 0xa3) (create-inst-map op 2 6 :ind-x :LAX)
+      (= op 0xb3) (create-inst-map op 2 5 :ind-y :LAX)
+      ;; SAX
+      (= op 0x87) (create-inst-map op 2 3 :zero :SAX)
+      (= op 0x97) (create-inst-map op 2 4 :zero-y :SAX)
+      (= op 0x83) (create-inst-map op 2 6 :ind-x :SAX)
+      (= op 0x8f) (create-inst-map op 3 4 :abs :SAX)
+      ;; USBC
+      (= op 0xeb) (create-inst-map op 2 2 :imm :USBC)
+      ;; DCP
+      (= op 0xc7) (create-inst-map op 2 5 :zero :DCP)
+      (= op 0xd7) (create-inst-map op 2 6 :zero-x :DCP)
+      (= op 0xcf) (create-inst-map op 3 6 :abs :DCP)
+      (= op 0xdf) (create-inst-map op 3 7 :abs-x :DCP)
+      (= op 0xdb) (create-inst-map op 3 7 :abs-y :DCP)
+      (= op 0xc3) (create-inst-map op 2 8 :ind-x :DCP)
+      (= op 0xd3) (create-inst-map op 2 8 :ind-y :DCP)
+      ;; ISB ( ISC, INS )
+      (= op 0xe7) (create-inst-map op 2 5 :zero :ISB)
+      (= op 0xf7) (create-inst-map op 2 6 :zero-x :ISB)
+      (= op 0xef) (create-inst-map op 3 6 :abs :ISB)
+      (= op 0xff) (create-inst-map op 3 7 :abs-x :ISB)
+      (= op 0xfb) (create-inst-map op 3 7 :abs-y :ISB)
+      (= op 0xe3) (create-inst-map op 2 8 :ind-x :ISB)
+      (= op 0xf3) (create-inst-map op 2 8 :ind-y :ISB)
+      ;; SLO (ASO)
+      (= op 0x07) (create-inst-map op 2 5 :zero :SLO)
+      (= op 0x17) (create-inst-map op 2 6 :zero-x :SLO)
+      (= op 0x0f) (create-inst-map op 3 6 :abs :SLO)
+      (= op 0x1f) (create-inst-map op 3 7 :abs-x :SLO)
+      (= op 0x1b) (create-inst-map op 3 7 :abs-y :SLO)
+      (= op 0x03) (create-inst-map op 2 8 :ind-x :SLO)
+      (= op 0x13) (create-inst-map op 2 8 :ind-y :SLO)
+      ;; RLA
+      (= op 0x27) (create-inst-map op 2 5 :zero :RLA)
+      (= op 0x37) (create-inst-map op 2 6 :zero-x :RLA)
+      (= op 0x2f) (create-inst-map op 3 6 :abs :RLA)
+      (= op 0x3f) (create-inst-map op 3 7 :abs-x :RLA)
+      (= op 0x3b) (create-inst-map op 3 7 :abs-y :RLA)
+      (= op 0x23) (create-inst-map op 2 8 :ind-x :RLA)
+      (= op 0x33) (create-inst-map op 2 8 :ind-y :RLA)
+      ;; SRE (LSE)
+      (= op 0x47) (create-inst-map op 2 5 :zero :SRE)
+      (= op 0x57) (create-inst-map op 2 6 :zero-x :SRE)
+      (= op 0x4f) (create-inst-map op 3 6 :abs :SRE)
+      (= op 0x5f) (create-inst-map op 3 7 :abs-x :SRE)
+      (= op 0x5b) (create-inst-map op 3 7 :abs-y :SRE)
+      (= op 0x43) (create-inst-map op 2 8 :ind-x :SRE)
+      (= op 0x53) (create-inst-map op 2 8 :ind-y :SRE)
+      ;; RRA
+      (= op 0x67) (create-inst-map op 2 5 :zero :RRA)
+      (= op 0x77) (create-inst-map op 2 6 :zero-x :RRA)
+      (= op 0x6f) (create-inst-map op 3 6 :abs :RRA)
+      (= op 0x7f) (create-inst-map op 3 7 :abs-x :RRA)
+      (= op 0x7b) (create-inst-map op 3 7 :abs-y :RRA)
+      (= op 0x63) (create-inst-map op 2 8 :ind-x :RRA)
+      (= op 0x73) (create-inst-map op 2 8 :ind-y :RRA))))
+
 
 (defn fetch-operands
   "Returns operands calculated based on the addressing mode.
@@ -285,17 +381,17 @@
       :ind-x (assoc inst :operands [(get-nth-operand 1)])
       :ind-y (assoc inst :operands [(get-nth-operand 1)]))))
 
-(defn read-byte [{^bytes memory :memory} address]
+(defn read-byte [^bytes memory address]
   (aget memory address))
 
-(defn write-byte [{^bytes memory :memory} address data]
+(defn write-byte [^bytes memory address data]
   "Sets byte into memory. Data argument must be a byte"
   (aset-byte memory address data))
 
 (defn handle-addressing-mode [state inst]
   "Returns values after handling the different addressing modes.
    Also returns extra cycles present or memory address if required"
-  (let [^byte memory (:memory state)
+  (let [memory (:memory state)
         reg-a (:reg-a state)
         reg-x (:reg-x state)
         reg-y (:reg-y state)
@@ -329,33 +425,33 @@
              {:value (read address) :mem-address address})
       :abs-x (let [address (get-address-from-operands)
                    x-val (Byte/toUnsignedInt reg-x)
-                   new-address (+ address x-val)
+                   new-address (bit-and 0xFFFF (+ address x-val))
                    extra-cycles (high-bits-same address new-address)]
                {:value (read new-address) :mem-address new-address :extra-cycles extra-cycles})
       :abs-y (let [address (get-address-from-operands)
                    y-val (Byte/toUnsignedInt reg-y)
-                   new-address (+ address y-val)
+                   new-address (bit-and 0xFFFF (+ address y-val))
                    extra-cycles (high-bits-same address new-address)]
                {:value (read new-address) :mem-address new-address :extra-cycles extra-cycles})
       :ind (let [lsb-address (get-address-from-operands)
                  msb-address (if (= 0x00FF (bit-and 0x00FF lsb-address))
                                (bit-and 0xFF00 lsb-address)
                                (+ 1 lsb-address))
-                 low (read lsb-address)
-                 high (read msb-address)
+                 low (Byte/toUnsignedInt (read lsb-address))
+                 high (Byte/toUnsignedInt (read msb-address))
                  address (bit-or (bit-shift-left high 8) low)]
              {:value address :mem-address address})
       :ind-x (let [offset (Byte/toUnsignedInt (first operands))
                    x-val (Byte/toUnsignedInt reg-x)
-                   low (bit-and 0x00FF (+ offset x-val))
-                   high (bit-and 0x00FF (+ offset x-val 1))
-                   address (make-address high low)]
+                   lo (read (bit-and 0x00FF (+ offset x-val)))
+                   hi (read (bit-and 0x00FF (+ offset x-val 1)))
+                   address (make-address (Byte/toUnsignedInt hi) (Byte/toUnsignedInt lo))]
                {:value (read address) :mem-address address})
       :ind-y (let [offset (Byte/toUnsignedInt (first operands))
-                   low (read offset)
-                   high (read (+ offset 1))
-                   base-address (make-address high low)
-                   address (+ base-address (Byte/toUnsignedInt reg-y))
+                   lo (Byte/toUnsignedInt (read (bit-and 0x00FF offset)))
+                   hi (Byte/toUnsignedInt (read (bit-and 0x00FF (+ offset 1))))
+                   base-address (bit-and 0xFFFF (make-address hi lo))
+                   address (bit-and 0xFFFF (+ base-address (Byte/toUnsignedInt reg-y)))
                    extra-cycles (high-bits-same base-address address)]
                {:value (read address) :mem-address address :extra-cycles extra-cycles}))))
 
@@ -378,7 +474,7 @@
     {:pc (+ (:bytes inst) (:pc state))
      :cycles-elapsed (+ extra-cycles (:cycles inst))
      :reg-a (unchecked-byte wrapped-res)
-     :carry (> val 0xFF)
+     :carry (> res 0xFF)
      :zero (zero? wrapped-res)
      :negative (bit-test wrapped-res 7)
      :overflow (overflowed-adc? acc fetched res)}))
@@ -386,15 +482,15 @@
 (defn execute-and [state inst values]
   (let [extra-cycles (or (:extra-cycles values) 0)
         res (bit-and (:reg-a state) (:value values))]
-    {:reg-a res
+    {:reg-a (unchecked-byte res)
      :pc (+ (:bytes inst) (:pc state))
      :cycles-elapsed (+ extra-cycles (:cycles inst))
      :zero (zero? res)
-     :negative (bit-test res 7)}))
+     :negative (utils/negative? res)}))
 
 (defn execute-asl [state inst values]
   (let [val (:value values)
-        res (bit-shift-left val 1)
+        res (unchecked-byte (bit-shift-left val 1))
         handle-acc-mem (fn [] (if (= (:mode inst) :acc)
                                 {:reg-a res
                                  :zero (zero? res)}
@@ -407,12 +503,13 @@
            (handle-acc-mem))))
 
 (defn branch-instruction-handler [state inst values test]
-  (let [pc (:pc state)
-        next-pc (if test (bit-and
-                           0xFFFF
-                           (+ (:bytes inst) pc (:value values))))
-        extra-cycles (+ (if test 1 0)
-                        (if (= (bit-and 0xFF00 next-pc) (bit-and 0xFF00 pc)) 0 2))]
+  (let [pc (+ (:bytes inst) (:pc state))
+        next-pc (if test (bit-and 0xFFFF (+ pc (:value values)))
+                         (bit-and 0xFFFF pc))
+        extra-cycles (+ (if test
+                          (+ 1 (if (= (bit-and 0xFF00 next-pc) (bit-and 0xFF00 pc))
+                                 0 1))
+                          0))]
     {:pc next-pc
      :cycles-elapsed (+ (:cycles inst) extra-cycles)}))
 
@@ -445,7 +542,7 @@
   (branch-instruction-handler state inst values (false? (:negative state))))
 
 (defn execute-brk [state inst _values]
-  (let [pc (unchecked-byte (+ 1 (Byte/toUnsignedInt (:pc state))))
+  (let [pc (+ 1 (:pc state))
         sp (:sp state)
         next-pc (utils/bytes-to-word
                   (read-byte (:memory state) 0xFFFF)
@@ -484,7 +581,6 @@
 (defn execute-clv [state inst _values]
   (implied-instruction-handler state inst {:overflow false}))
 
-(defn negative? [val] (bit-test val 7))
 
 (defn execute-cmp [state inst values]
   (let [extra-cycles (or (:extra-cycles values) 0)
@@ -495,7 +591,7 @@
      :cycles-elapsed (+ (:cycles inst) extra-cycles)
      :carry (>= acc val)
      :zero (zero? (bit-and 0xFF res))
-     :negative (negative? res)}))
+     :negative (utils/negative? res)}))
 
 (defn execute-cpx [state inst values]
   (let [val (Byte/toUnsignedInt (:value values))
@@ -505,7 +601,7 @@
      :cycles-elapsed (:cycles inst)
      :carry (>= val-x val)
      :zero (zero? (bit-and 0xFF res))
-     :negative (negative? res)}))
+     :negative (utils/negative? res)}))
 
 (defn execute-cpy [state inst values]
   (let [val (Byte/toUnsignedInt (:value values))
@@ -515,7 +611,7 @@
      :cycles-elapsed (:cycles inst)
      :carry (>= val-y val)
      :zero (zero? (bit-and 0xFF res))
-     :negative (negative? res)}))
+     :negative (utils/negative? res)}))
 
 (defn execute-dec [state inst values]
   (let [val (Byte/toUnsignedInt (:value values))
@@ -525,8 +621,7 @@
       {:pc (+ (:pc state) (:bytes inst))
        :cycles-elapsed (:cycles inst)
        :zero (zero? res)
-       :negative (negative? res)})))
-
+       :negative (utils/negative? res)})))
 
 (defn execute-dex [state inst _values]
   (let [reg-x (bit-and 0xFF (- (Byte/toUnsignedInt (:reg-x state)) 1))]
@@ -549,7 +644,7 @@
      :cycles-elapsed (+ (:cycles inst) extra-cycles)
      :reg-a res
      :zero (zero? res)
-     :negative (negative? res)}))
+     :negative (utils/negative? res)}))
 
 (defn execute-inc [state inst values]
   (let [val (Byte/toUnsignedInt (:value values))
@@ -559,7 +654,7 @@
       {:pc (+ (:pc state) (:bytes inst))
        :cycles-elapsed (:cycles inst)
        :zero (zero? res)
-       :negative (negative? res)})))
+       :negative (utils/negative? res)})))
 
 (defn execute-inx [state inst _values]
   (let [reg-x (bit-and 0xFF (+ (Byte/toUnsignedInt (:reg-x state)) 1))]
@@ -568,7 +663,7 @@
                                              :negative (bit-test reg-x 7)})))
 
 (defn execute-iny [state inst _values]
-  (let [reg-y (bit-and 0xFF (- (Byte/toUnsignedInt (:reg-y state)) 1))]
+  (let [reg-y (bit-and 0xFF (+ (Byte/toUnsignedInt (:reg-y state)) 1))]
     (implied-instruction-handler state inst {:reg-y (unchecked-byte reg-y)
                                              :zero (zero? reg-y)
                                              :negative (bit-test reg-y 7)})))
@@ -581,7 +676,7 @@
 (defn execute-jsr [state inst values]
   (let [next-pc (:mem-address values)
         sp (:sp state)
-        pc (- (:pc state) 1)
+        pc (- (+ (:pc state) (:bytes inst)) 1)
         low (utils/word-lsb pc)
         high (utils/word-msb pc)
         address (+ 0x100 sp)]
@@ -599,7 +694,7 @@
      :cycles-elapsed (+ (:cycles inst) extra-cycles)
      :reg-a res
      :zero (zero? res)
-     :negative (negative? res)}))
+     :negative (utils/negative? res)}))
 
 (defn execute-ldx [state inst values]
   (let [res (:value values)
@@ -608,7 +703,7 @@
      :cycles-elapsed (+ (:cycles inst) extra-cycles)
      :reg-x res
      :zero (zero? res)
-     :negative (negative? res)}))
+     :negative (utils/negative? res)}))
 
 (defn execute-ldy [state inst values]
   (let [res (:value values)
@@ -617,12 +712,11 @@
      :cycles-elapsed (+ (:cycles inst) extra-cycles)
      :reg-y res
      :zero (zero? res)
-     :negative (negative? res)}))
-
+     :negative (utils/negative? res)}))
 
 (defn execute-lsr [state inst values]
   (let [val (:value values)
-        res (unsigned-bit-shift-right val 1)
+        res (unchecked-byte (unsigned-bit-shift-right (Byte/toUnsignedInt val) 1))
         handle-acc-mode (fn []
                           (if (= :acc (:mode inst))
                             {:reg-a res}
@@ -631,9 +725,9 @@
                               nil)))]
     (merge {:pc (+ (:pc state) (:bytes inst))
             :cycles-elapsed (:cycles inst)
-            :carry (utils/bool-to-int (bit-test val 0))
+            :carry (bit-test val 0)
             :zero (zero? res)
-            :negative (negative? res)}
+            :negative (utils/negative? res)}
            (handle-acc-mode))))
 
 (defn execute-nop [state inst _values]
@@ -646,16 +740,16 @@
         extra-cycles (or (:extra-cycles values) 0)]
     {:cycles-elapsed (+ extra-cycles (:cycles inst))
      :pc (+ (:bytes inst) (:pc state))
-     :reg-a res
+     :reg-a (unchecked-byte res)
      :zero (zero? res)
-     :negative (negative? res)}))
-
+     :negative (utils/negative? res)}))
 
 (defn execute-pha [state inst _values]
-  (let [sp (:sp state)
+  (let [acc (:reg-a state)
+        sp (:sp state)
         address (+ 0x100 sp)]
     (do
-      (write-byte (:memory state) address (:reg-a state))
+      (write-byte (:memory state) address acc)
       (implied-instruction-handler state inst {:sp (- sp 1)}))))
 
 (defn execute-php [state inst _values]
@@ -663,25 +757,27 @@
         address (+ 0x100 sp)]
     (do
       (write-byte (:memory state) address (status-to-byte
-                                            (assoc state :break-command true :unused true)))
+                                            (merge state {:break-command true
+                                                          :unused true})))
       (implied-instruction-handler state inst {:sp (- sp 1)
                                                :break-command false
-                                               :unused false}))))
+                                               :unused true}))))
 
 (defn execute-pla [state inst _values]
-  (let [sp (:sp state)
+  (let [sp (+ (:sp state) 1)
         val (read-byte (:memory state) (+ 0x100 sp))]
     (implied-instruction-handler state inst {:reg-a val
-                                             :sp (+ sp 1)
+                                             :sp sp
                                              :zero (zero? val)
                                              :negative (bit-test val 7)})))
 
 (defn execute-plp [state inst _values]
-  (let [sp (:sp state)
+  (let [sp (+ (:sp state) 1)
         status-byte (read-byte (:memory state) (+ 0x100 sp))]
     (implied-instruction-handler state inst (merge
                                               (byte-to-status status-byte)
-                                              {:sp (+ sp 1)
+                                              {:sp sp
+                                               :break-command false
                                                :unused true}))))
 
 (defn execute-rol [state inst values]
@@ -702,7 +798,10 @@
 
 (defn execute-ror [state inst values]
   (let [val (:value values)
-        res (utils/set-bit (unchecked-byte (unsigned-bit-shift-right val 1)) (:carry state) 7)
+        res (unchecked-byte (utils/set-bit
+                              (unchecked-byte (unsigned-bit-shift-right (Byte/toUnsignedInt val) 1))
+                              (:carry state)
+                              7))
         handle-acc-mode (fn []
                           (if (= :acc (:mode inst))
                             {:reg-a res
@@ -710,7 +809,7 @@
                             (do
                               (write-byte (:memory state) (:mem-address values) res)
                               nil)))]
-    (merge {:pc (+ (:pc state) (:byte inst))
+    (merge {:pc (+ (:pc state) (:bytes inst))
             :cycles-elapsed (:cycles inst)
             :carry (bit-test val 0)
             :negative (bit-test res 7)}
@@ -726,13 +825,14 @@
             :sp (+ sp 3)}
            (merge (byte-to-status status-byte)
                   {:break-command false
-                   :unused false}))))
+                   :unused true}))))
 
 (defn execute-rts [state inst _values]
   (let [sp (:sp state)
         pc-lsb (read-byte (:memory state) (+ 0x100 1 sp))
         pc-msb (read-byte (:memory state) (+ 0x100 2 sp))]
     {:pc (+ 1 (utils/bytes-to-word pc-msb pc-lsb))
+     :sp (+ 2 sp)
      :cycles-elapsed (:cycles inst)}))
 
 (defn overflowed-sbc? [acc mem res]
@@ -797,25 +897,25 @@
   (let [acc (:reg-a state)]
     (implied-instruction-handler state inst {:reg-x acc
                                              :zero (zero? acc)
-                                             :negative (bit-test acc 7)})))
+                                             :negative (utils/negative? acc)})))
 
 (defn execute-tay [state inst _values]
   (let [acc (:reg-a state)]
     (implied-instruction-handler state inst {:reg-y acc
                                              :zero (zero? acc)
-                                             :negative (bit-test acc 7)})))
+                                             :negative (utils/negative? acc)})))
 
 (defn execute-tsx [state inst _values]
   (let [sp-val (unchecked-byte (:sp state))]
     (implied-instruction-handler state inst {:reg-x sp-val
                                              :zero (zero? sp-val)
-                                             :negative (bit-test sp-val 7)})))
+                                             :negative (utils/negative? sp-val)})))
 
 (defn execute-txa [state inst _values]
   (let [x-val (:reg-x state)]
     (implied-instruction-handler state inst {:reg-a x-val
                                              :zero (zero? x-val)
-                                             :negative (bit-test x-val 7)})))
+                                             :negative (utils/negative? x-val)})))
 
 
 (defn execute-txs [state inst _values]
@@ -827,13 +927,172 @@
   (let [y-val (:reg-y state)]
     (implied-instruction-handler state inst {:reg-a y-val
                                              :zero (zero? y-val)
-                                             :negative (bit-test y-val 7)})))
+                                             :negative (utils/negative? y-val)})))
+(defn execute-dop [state inst values]
+  {:pc (+ (:pc state) (:bytes inst))
+   :cycles-elapsed (:cycles inst)})
+
+(defn execute-top [state inst values]
+  (let [extra-cycles (or (:extra-cycles values) 0)]
+    {:pc (+ (:pc state) (:bytes inst))
+     :cycles-elapsed (+ extra-cycles (:cycles inst))}))
+
+(defn execute-lax [state inst values]
+  (let [res (:value values)
+        extra-cycles (or (:extra-cycles values) 0)]
+    {:cycles-elapsed (+ extra-cycles (:cycles inst))
+     :pc (+ (:bytes inst) (:pc state))
+     :reg-x res
+     :reg-a res
+     :zero (zero? res)
+     :negative (utils/negative? res)}))
+
+(defn execute-sax [state inst values]
+  (let [res (bit-and
+              (Byte/toUnsignedInt (:reg-x state))
+              (Byte/toUnsignedInt (:reg-a state)))
+        address (:mem-address values)]
+    (do
+      (write-byte (:memory state) address (unchecked-byte res))
+      {:cycles-elapsed (:cycles inst)
+       :pc (+ (:bytes inst) (:pc state))})))
+
+(defn execute-usbc [state inst values]
+  (execute-sbc state inst values))
+
+(defn execute-dcp [state inst values]
+  (let [val (bit-and 0xFF (- (Byte/toUnsignedInt (:value values)) 1))
+        acc (Byte/toUnsignedInt (:reg-a state))
+        res (- acc val)]
+    (do
+      (write-byte (:memory state) (:mem-address values) (unchecked-byte val))
+      {:pc (+ (:pc state) (:bytes inst))
+       :cycles-elapsed (:cycles inst)
+       :carry (>= acc val)
+       :zero (zero? (bit-and 0xFF res))
+       :negative (utils/negative? res)})))
+
+(defn execute-isb [state inst values]
+  (let [val (bit-and 0xFF (+ 1 (Byte/toUnsignedInt (:value values))))
+        val-inv (bit-xor 0x00FF val)
+        acc (Byte/toUnsignedInt (:reg-a state))
+        res (+ (utils/bool-to-int (:carry state))
+               acc
+               val-inv)
+        wrapped-res (bit-and res 0xFF)]
+    (do
+      (write-byte (:memory state) (:mem-address values) (unchecked-byte val))
+      {:pc (+ (:bytes inst) (:pc state))
+       :cycles-elapsed (:cycles inst)
+       :reg-a (unchecked-byte wrapped-res)
+       :carry (> res 0xFF)
+       :zero (zero? wrapped-res)
+       :overflow (overflowed-sbc? acc val-inv res)
+       :negative (utils/negative? wrapped-res)})))
+
+(defn execute-slo [state inst values]
+  (let [val (:value values)
+        acc (:reg-a state)
+        val-shifted (unchecked-byte (bit-shift-left (Byte/toUnsignedInt val) 1))
+        res (bit-or val-shifted acc)]
+    (do
+      (write-byte (:memory state) (:mem-address values) val-shifted)
+      {:pc (+ (:bytes inst) (:pc state))
+       :cycles-elapsed (:cycles inst)
+       :reg-a (unchecked-byte res)
+       :zero (zero? res)
+       :negative (utils/negative? res)
+       :carry (bit-test val 7)})))
+
+(defn execute-rla [state inst values]
+  (let [val (:value values)
+        val-shifted (utils/set-bit
+                      (unchecked-byte (bit-shift-left (Byte/toUnsignedInt val) 1))
+                      (:carry state)
+                      0)
+        res (bit-and (:reg-a state) (unchecked-byte val-shifted))]
+    (do
+      (write-byte (:memory state) (:mem-address values) val-shifted)
+      {:pc (+ (:pc state) (:bytes inst))
+       :cycles-elapsed (:cycles inst)
+       :reg-a (unchecked-byte res)
+       :zero (zero? res)
+       :negative (utils/negative? res)
+       :carry (bit-test val 7)})))
+
+(defn execute-sre [state inst values]
+  (let [val (:value values)
+        acc (:reg-a state)
+        val-shifted (unchecked-byte (unsigned-bit-shift-right (Byte/toUnsignedInt val) 1))
+        res (bit-xor val-shifted acc)]
+    (do
+      (write-byte (:memory state) (:mem-address values) val-shifted)
+      {:pc (+ (:pc state) (:bytes inst))
+       :cycles-elapsed (:cycles inst)
+       :reg-a (unchecked-byte res)
+       :zero (zero? res)
+       :negative (utils/negative? res)
+       :carry (bit-test val 0)})))
+
+(defn execute-rra [state inst values]
+  (let [val (:value values)
+        val-shifted (unchecked-byte (utils/set-bit
+                                      (unchecked-byte (unsigned-bit-shift-right (Byte/toUnsignedInt val) 1))
+                                      (:carry state)
+                                      7))
+        acc (Byte/toUnsignedInt (:reg-a state))
+        res (+ (utils/bool-to-int (bit-test val 0)) acc (Byte/toUnsignedInt val-shifted))
+        wrapped-res (bit-and 0xff res)]
+    (do
+      (write-byte (:memory state) (:mem-address values) val-shifted)
+      {:pc (+ (:bytes inst) (:pc state))
+       :cycles-elapsed (:cycles inst)
+       :reg-a (unchecked-byte wrapped-res)
+       :carry (> res 0xff)
+       :zero (zero? wrapped-res)
+       :negative (utils/negative? wrapped-res)
+       :overflow (overflowed-adc? acc (Byte/toUnsignedInt val-shifted) res)})))
+
+;(defn execute-adc [state inst values]
+;  (let [extra-cycles (or (:extra-cycles values) 0)
+;        acc (Byte/toUnsignedInt (:reg-a state))
+;        fetched (Byte/toUnsignedInt (:value values))
+;        res (+ (utils/bool-to-int (:carry state))
+;               acc
+;               fetched)
+;        wrapped-res (bit-and 0xFF res)]
+;    {:pc (+ (:bytes inst) (:pc state))
+;     :cycles-elapsed (+ extra-cycles (:cycles inst))
+;     :reg-a (unchecked-byte wrapped-res)
+;     :carry (> res 0xFF)
+;     :zero (zero? wrapped-res)
+;     :negative (bit-test wrapped-res 7)
+;     :overflow (overflowed-adc? acc fetched res)}))
+;
+;
+;(defn execute-ror [state inst values]
+;  (let [val (:value values)
+;        res (unchecked-byte (utils/set-bit
+;                              (unchecked-byte (unsigned-bit-shift-right (Byte/toUnsignedInt val) 1))
+;                              (:carry state)
+;                              7))
+;        handle-acc-mode (fn []
+;                          (if (= :acc (:mode inst))
+;                            {:reg-a res
+;                             :zero (zero? res)}
+;                            (do
+;                              (write-byte (:memory state) (:mem-address values) res)
+;                              nil)))]
+;    (merge {:pc (+ (:pc state) (:bytes inst))
+;            :cycles-elapsed (:cycles inst)
+;            :carry (bit-test val 0)
+;            :negative (bit-test res 7)}
+;           (handle-acc-mode))))
 
 (defn execute
-  "Returns the changed cpu state, and cycles elapsed after executing instruction."
+  "Returns the next cpu state, and cycles elapsed after executing instruction."
   [state inst]
   (let [name (:name inst)
-        ^bytes memory (:memory state)
         values (handle-addressing-mode state inst)]
     (condp = name
       :ADC (execute-adc state inst values)
@@ -891,9 +1150,23 @@
       :TSX (execute-tsx state inst values)
       :TXA (execute-txa state inst values)
       :TXS (execute-txs state inst values)
-      :TYA (execute-tya state inst values))))
+      :TYA (execute-tya state inst values)
+      :DOP (execute-dop state inst values)
+      :TOP (execute-top state inst values)
+      :LAX (execute-lax state inst values)
+      :SAX (execute-sax state inst values)
+      :USBC (execute-usbc state inst values)
+      :DCP (execute-dcp state inst values)
+      :ISB (execute-isb state inst values)
+      :SLO (execute-slo state inst values)
+      :RLA (execute-rla state inst values)
+      :SRE (execute-sre state inst values)
+      :RRA (execute-rra state inst values))))
 
-(fetch-operands state (decode (fetch state)))
-
-
-
+(defn run-instruction [state]
+  (let [opcode (fetch state)
+        inst (fetch-operands state (decode opcode))
+        next-state (execute state inst)]
+    (merge state next-state {:pc (bit-and 0xffff (:pc next-state))
+                             :cycles (+ (:cycles state)
+                                        (:cycles-elapsed next-state))})))
