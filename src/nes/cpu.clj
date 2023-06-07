@@ -1,22 +1,6 @@
 (ns nes.cpu
-  (:require [nes.utils :as utils]
-            [nes.instructions :refer :all]))
-
-(def memory-size 65536)
-
-(def default-cpu-state
-  (merge {:sp                0xFD
-          :pc                0
-          :reg-a             (byte 0)
-          :reg-x             (byte 0)
-          :reg-y             (byte 0)
-          :cycles            0
-          :memory            (byte-array memory-size (unchecked-byte 0x0))}
-         (byte-to-status 0x24)))
-
-(defn create-cpu
-  ([] (create-cpu nil))
-  ([kvs] (merge default-cpu-state kvs)))
+  (:require
+   [nes.instructions :refer :all]))
 
 (defn fetch
   "Returns byte pointed by the program counter."
@@ -338,7 +322,6 @@
       (= op 0x63) (create-inst-map op 2 8 :ind-x :RRA)
       (= op 0x73) (create-inst-map op 2 8 :ind-y :RRA))))
 
-
 (defn fetch-operands
   "Returns operands calculated based on the addressing mode.
    Operands are in signed byte representation."
@@ -375,7 +358,7 @@
         get-address-from-operands (fn []
                                     (let [low (Byte/toUnsignedInt (first operands))
                                           high (Byte/toUnsignedInt (second operands))]
-                                         (bit-or (bit-shift-left high 8) low)))
+                                      (bit-or (bit-shift-left high 8) low)))
         high-bits-same (fn [addr-1 addr-2]
                          (cond
                            (= (bit-and addr-1 0xFF00) (bit-and addr-2 0xFF00)) 0
@@ -384,7 +367,8 @@
       :imp {}
       :acc {:value reg-a}
       :imm {:value (first operands)}
-      :zero {:value (read (Byte/toUnsignedInt (first operands))) :mem-address (Byte/toUnsignedInt (first operands))}
+      :zero {:value (read (Byte/toUnsignedInt (first operands))) 
+             :mem-address (Byte/toUnsignedInt (first operands))}
       :zero-x (let [address (bit-and 0x00FF
                                      (+ (Byte/toUnsignedInt reg-x)
                                         (Byte/toUnsignedInt (first operands))))]
@@ -509,3 +493,4 @@
     (merge state next-state {:pc (bit-and 0xffff (:pc next-state))
                              :cycles (+ (:cycles state)
                                         (:cycles-elapsed next-state))})))
+
