@@ -14,9 +14,11 @@
 
 (def state (bus/create-state))
 
-(defonce cartridge (cart/load-cartridge "../../downloads/nes-roms/Donkey Kong (World) (Rev A)/Donkey Kong (World) (Rev A).nes"))
+(comment
+  (defonce cartridge (cart/load-cartridge "../../downloads/nes-roms/Donkey Kong (World) (Rev A)/Donkey Kong (World) (Rev A).nes")))
 
-(cart/load-nrom-0 state cartridge)
+(comment
+  (cart/load-nrom-0 state cartridge))
 
 (comment
   (fx/on-fx-thread
