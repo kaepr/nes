@@ -1,11 +1,11 @@
 (ns nes.core
-  (:require [cljfx.api :as fx]
-            [nes.cpu :as cpu]
+  (:require [nes.cpu :as cpu]
             [nes.bus :as bus]
             [nes.cartridge :as cart])
   (:gen-class))
 
 (set! *warn-on-reflection* true)
+(set! *unchecked-math* :warn-on-boxed)
 
 (defn -main
   "NES Emulator"
@@ -19,17 +19,3 @@
 
 (comment
   (cart/load-nrom-0 state cartridge))
-
-(comment
-  (fx/on-fx-thread
-   (fx/create-component
-    {:fx/type :stage
-     :showing true
-     :title "Cljfx example"
-     :width 300
-     :height 100
-     :scene {:fx/type :scene
-             :root {:fx/type :v-box
-                    :alignment :center
-                    :children [{:fx/type :label
-                                :text "Hello world"}]}}})))

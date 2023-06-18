@@ -3,7 +3,9 @@
 (defn bool-to-int [test]
   (if test 1 0))
 
-(def status-bit-vec [:carry :zero :interrupt-disable :decimal-mode :break-command :unused :overflow :negative])
+(def status-bit-vec
+  "Status bits of the P register. Ordered based on their positions."
+  [:carry :zero :interrupt-disable :decimal-mode :break-command :unused :overflow :negative])
 
 (defn status-to-byte [state]
   (let [coll (map-indexed (fn [idx itm]

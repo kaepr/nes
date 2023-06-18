@@ -1,4 +1,5 @@
 (ns nes.cpu
+  #_{:clj-kondo/ignore [:refer-all]}
   (:require
    [nes.instructions :refer :all]))
 
@@ -344,9 +345,10 @@
       :ind-x (assoc inst :operands [(get-nth-operand 1)])
       :ind-y (assoc inst :operands [(get-nth-operand 1)]))))
 
-(defn handle-addressing-mode [state inst]
+(defn handle-addressing-mode
   "Returns values after handling the different addressing modes.
    Also returns extra cycles present or memory address if required"
+  [state inst]
   (let [memory (:memory state)
         reg-a (:reg-a state)
         reg-x (:reg-x state)
@@ -367,7 +369,7 @@
       :imp {}
       :acc {:value reg-a}
       :imm {:value (first operands)}
-      :zero {:value (read (Byte/toUnsignedInt (first operands))) 
+      :zero {:value (read (Byte/toUnsignedInt (first operands)))
              :mem-address (Byte/toUnsignedInt (first operands))}
       :zero-x (let [address (bit-and 0x00FF
                                      (+ (Byte/toUnsignedInt reg-x)

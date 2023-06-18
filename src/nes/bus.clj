@@ -14,6 +14,7 @@
           :reg-x             (byte 0)
           :reg-y             (byte 0)
           :cycles            0
+          :cycles-elapsed    0
           :memory            (byte-array MEMORY-SIZE (unchecked-byte 0x00))
           :ppu-memory        (byte-array PPU-MEMORY-SIZE (unchecked-byte 0x00))}
          (utils/byte-to-status STATUS-REG-DEFAULT)))
