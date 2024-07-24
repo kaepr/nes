@@ -8,7 +8,7 @@ Project bootstrapped using [deps-new](https://github.com/seancorfield/deps-new)
 - [clojure2d](https://github.com/Clojure2D/clojure2d)
 
 ### Progress
-- [x] CPU (Pass Nestest)
+- [x] 6502 CPU Emulation CPU (Pass Nestest ROM)
 - [ ] PPU
 - [ ] ...
 
